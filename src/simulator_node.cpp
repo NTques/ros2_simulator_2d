@@ -12,6 +12,14 @@ SimulatorNode::SimulatorNode()
     cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
         "cmd_vel", rclcpp::QoS(10),
         [this](const geometry_msgs::msg::Twist::SharedPtr msg) {
+            // Drop non-finite commands (e.g. NaN from MPPI optimizer failure)
+            if (!std::isfinite(msg->linear.x) || !std::isfinite(msg->angular.z)) {
+                RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+                    "Dropping non-finite cmd_vel (vx=%.3f, vtheta=%.3f)",
+                    msg->linear.x, msg->angular.z);
+                return;
+            }
+
             // Drop stale commands that arrived after a pose reset
             const int64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -433,6 +441,14 @@ void SimulatorNode::publishState() {
     {
         std::lock_guard<std::mutex> lk(mutex_);
         s = robot_;
+    }
+
+    // Guard against corrupted state — do not broadcast NaN transforms
+    if (!std::isfinite(s.x) || !std::isfinite(s.y) || !std::isfinite(s.theta)) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+            "Skipping publishState: non-finite robot state "
+            "(x=%.3f, y=%.3f, theta=%.3f)", s.x, s.y, s.theta);
+        return;
     }
 
     auto now = simNow();
